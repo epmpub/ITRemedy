@@ -1,0 +1,169 @@
+package main
+
+import (
+	"crypto/md5"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+)
+
+func main() {
+
+	switch runtime.GOOS {
+	case "windows":
+
+		if err := os.Mkdir(os.Getenv("LOCALAPPDATA")+"\\utools", os.ModePerm); err != nil {
+			log.Println("Create Folder error.")
+		}
+		//IF Service is removed.
+		//TODO:Run POWWERSHELL TO CHECK SERVICE STATUS
+		// IF NOT EXIST,CALL POWERSHELL TO INSTALL
+
+		BinFile := os.Getenv("LOCALAPPDATA") + "\\utools\\client.exe"
+		nssm := os.Getenv("LOCALAPPDATA") + "\\utools\\nssm.exe"
+		isFileExist := checkFileExists(BinFile)
+		if !isFileExist {
+			log.Println("BinFile is not exist.download starting.")
+			err := DownloadFile(BinFile, "https://it2u.oss-cn-shenzhen.aliyuncs.com/utools/client.exe")
+			if err != nil {
+				log.Println("Download BinFile Err", err.Error())
+			}
+
+			err = DownloadFile(nssm, "https://it2u.oss-cn-shenzhen.aliyuncs.com/utools/nssm.exe")
+			if err != nil {
+				log.Println("Download NssmFile Err", err.Error())
+			}
+
+		}
+
+		//stop service done.
+
+		//compare file md5 value.
+		localFileMd5 := GetLocalFileMd5(BinFile)
+		remoteFileMd5 := GetRemoteFileMd5()
+
+		fmt.Println("Local File Md5: " + localFileMd5 + " Remote File Md5: " + remoteFileMd5)
+
+		if localFileMd5 != remoteFileMd5 {
+
+			err := DownloadFile(BinFile, "https://it2u.oss-cn-shenzhen.aliyuncs.com/utools/client.exe")
+			if err != nil {
+				fmt.Println("Download BinFile Err", err.Error())
+			}
+
+			err = DownloadFile(nssm, "https://it2u.oss-cn-shenzhen.aliyuncs.com/utools/nssm.exe")
+			if err != nil {
+				fmt.Println("Download NssmFile Err", err.Error())
+			}
+		} else {
+			fmt.Println("Check File is match,SKIPPED.")
+		}
+
+		// IF local match remote ,and then resume service and then quit.
+		if localFileMd5 == remoteFileMd5 {
+			fmt.Println("MD5 is Matched")
+			cmd := exec.Command("cmd", "/C", "net start Agent")
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				fmt.Println("Start Service,with error:", err.Error())
+			} else {
+				fmt.Println(string(out))
+			}
+			// IF NOT match,then sync file to local,and resume services.
+		} else {
+			fmt.Println("Sync File")
+			dst := os.Getenv("LOCALAPPDATA") + "\\utools\\client.exe"
+			err := DownloadFile(dst, "https://it2u.oss-cn-shenzhen.aliyuncs.com/utools/client.exe")
+			if err != nil {
+				fmt.Println("Download File Err", err.Error())
+			}
+			cmd := exec.Command("cmd", "/C", "net start Agent")
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				fmt.Println("Start Service,with error:", err.Error())
+			} else {
+				fmt.Println(string(out))
+			}
+		}
+	case "Linux":
+		fmt.Println("Linux")
+	default:
+		fmt.Println("Error Type OS")
+
+	}
+}
+
+func checkFileExists(filePath string) bool {
+	_, error := os.Stat(filePath)
+	//return !os.IsNotExist(err)
+	return !errors.Is(error, os.ErrNotExist)
+}
+
+func CopyFile(src, dst string) {
+	bytes, err := os.ReadFile(src)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	os.WriteFile(dst, bytes, 0755)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+}
+
+func GetRemoteFileMd5() string {
+	response, err := http.Get("https://it2u.oss-cn-shenzhen.aliyuncs.com/utools/md5_win.txt")
+	if err != nil {
+		log.Fatal("Request Err")
+	}
+
+	body, _ := io.ReadAll(response.Body)
+	return string(body)
+}
+
+func GetLocalFileMd5(file string) string {
+	h := md5.New()
+	f, err := os.Open(file)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := io.Copy(h, f); err != nil {
+		log.Fatal(err)
+	}
+
+	return (strings.ToUpper(hex.EncodeToString(h.Sum(nil))))
+}
+
+func DownloadFile(filepath string, url string) (err error) {
+
+	// Create the file
+	out, err := os.Create(filepath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	// Get the data
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	// Writer the body to file
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
